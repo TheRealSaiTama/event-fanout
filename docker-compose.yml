@@ -1,0 +1,14 @@
+version: "3.8"
+services:
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+  event-fanout:
+    build: .
+    environment:
+      - ADDR=:8081
+      - REDIS_ADDR=redis:6379
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
