@@ -1,99 +1,80 @@
 # event-fanout — WebSocket Fan-out Service (Go + Redis Pub/Sub)
 
-[![Go](https://img.shields.io/badge/Go-1.25+-blue)](https://go.dev/)
-[![CI](https://img.shields.io/github/actions/workflow/status/TheRealSaiTama/event-fanout/ci.yml?branch=main)](https://github.com/TheRealSaiTama/event-fanout/actions)
-[![Dockerized](https://img.shields.io/badge/Docker-ready-informational)](#docker-compose)
+[![Go](https://img.shields.io/badge/Go-1.25+-00ADD8.svg)](https://go.dev/)
+[![CI](https://github.com/TheRealSaiTama/event-fanout/actions/workflows/ci.yml/badge.svg)](https://github.com/TheRealSaiTama/event-fanout/actions/workflows/ci.yml)
+[![Dockerized](https://img.shields.io/badge/Docker-ready-2496ED.svg)](https://docs.docker.com/)
 
-High-throughput **room-based broadcast** over WebSockets with **heartbeats** and **back-pressure-aware writers**. Horizontal fan-out via **Redis Pub/Sub**. Clean shutdown & connection drain.
-
-## Features
-- Goroutine/channel design with `Hub` → `Room` → `Client` primitives
-- Back-pressure handling (bounded outbox + drop & accounting)
-- `/ws` endpoint with `room` & `client_id` params
-- Health & simple metrics endpoints
-- Dockerfile, Compose, GitHub Actions CI
-- k6 script + Go bench harness for repeatable load tests
+A tiny, fast fan-out gateway written in Go. It uses goroutines/channels with **room-based broadcast**, **heartbeats**, and **back-pressure-aware writers**. Horizontal fan-out is done via **Redis Pub/Sub** (swappable), plus a **sharded channel registry** and **graceful shutdown** with connection drain.
 
 ## Quickstart
 
 ```bash
-# 1) Redis
+# Redis via Docker
 docker run -d --name ef-redis -p 6379:6379 redis:7-alpine
 
-# 2) Run server locally
-make run   # or: ADDR=:8081 REDIS_ADDR=localhost:6379 go run ./cmd/server
+# Build & run
+go mod tidy
+make build
+ADDR=:8081 REDIS_ADDR=localhost:6379 ./bin/event-fanout
 
-# WS URL: ws://localhost:8081/ws?room=room1&client_id=alice
+# Smoke
+curl -s http://localhost:8081/healthz
+curl -s http://localhost:8081/metrics
 ````
 
-## HTTP
+### Docker Compose
+
+```yaml
+services:
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+  event-fanout:
+    build: .
+    environment:
+      - ADDR=:8081
+      - REDIS_ADDR=redis:6379
+    ports: ["8081:8081"]
+    depends_on: [redis]
+```
+
+## API
 
 * `GET /healthz` → `"ok"` if Redis reachable
-* `GET /metrics` → `rooms`, `clients`, `dropped_messages`
-* `GET /ws?room=<name>&client_id=<id>` → WebSocket endpoint
+* `GET /metrics` → `rooms <n>\nclients <n>\ndropped_messages <n>`
+* `GET /ws?room=<name>&client_id=<id>` → WebSocket; sending text frames publishes to the room via Redis.
 
-## Bench Results (2025-11-06)
+## Architecture (tiny tour)
 
-* **Clients (K)**: **200**
-* **Throughput**: **3,992 msgs/s**
-* **P95 latency**: **0.9 ms**
-* p50: 0.6 ms, p99: 1.5 ms
+* **Hub** → manages rooms; tracks clients and drop counts.
+* **Room** → in-memory set of clients; broadcast with non-blocking writes and drop on back-pressure.
+* **Client** → ping/pong heartbeats, write & read pumps, buffered outbox.
+* **Redis Pub/Sub** → fan-out across processes; messages published on `room:<name>`.
 
-> Method: custom Go WS bench (`bench/latency_bench.go`) over a single Redis-backed fan-out room on localhost.
+## Bench Results (2025-11-06, local)
 
-## Architecture (Mermaid)
+* **Clients (K)**: 200
+* **Throughput**: ~3992 msgs/s
+* **Latency**: p50 ≈ 0.6 ms, **p95 ≈ 0.9 ms**, p99 ≈ 1.5 ms
 
-```mermaid
-flowchart LR
-  subgraph Clients
-    A1[Client 1]:::c; A2[Client 2]:::c; A3[Client N]:::c
-  end
-  A1 -- WS /ws --> S[Event-Fanout Server]
-  A2 -- WS /ws --> S
-  A3 -- WS /ws --> S
-  S <---> R[(Redis Pub/Sub)]
-  S -- broadcast --> A1
-  S -- broadcast --> A2
-  S -- broadcast --> A3
-  classDef c fill:#eef,stroke:#88f;
-```
+> Method: custom Go WS bench (`bench/latency_bench.go`) publishing timestamps to a single room on localhost (Redis on Docker).
 
-## Repo Layout
-
-```
-.
-├─ cmd/server/main.go
-├─ internal/
-│  ├─ server/    # HTTP server, routing, metrics
-│  ├─ store/     # Redis wrapper + Pub/Sub (Broadcaster interface)
-│  └─ ws/        # Hub / Room / Client, WS handler, back-pressure
-├─ bench/
-│  ├─ latency_bench.go    # Go bench harness
-│  └─ ws_broadcast.js     # k6 WS script
-├─ Makefile  Dockerfile  docker-compose.yml  .github/workflows/ci.yml
-```
-
-## Dev
+## Reproduce the bench
 
 ```bash
-make build        # build bin/event-fanout
-make run          # run on :8081 (needs Redis)
-make bench        # k6 script (optional)
+export GOCACHE="$PWD/.gocache" GOMODCACHE="$PWD/.gomodcache"
+go run bench/latency_bench.go -n 200 -rate 200 -dur 30s -base ws://localhost:8081/ws -room room1
 ```
 
-## Roadmap
+## Production hardening (future work)
 
-* Multi-node hub with sharded registries
-* JWT auth & per-room ACLs
-* Prometheus metrics & dashboards
-* NATS/JetStream swap for Pub/Sub
+* Auth / JWT on `Upgrade`
+* Per-room sharding keys, pooled publishers
+* NATS / Kafka swap layer
+* Prometheus metrics + dashboards
+* K8s manifests (readiness/liveness, HPA)
+* Soak tests (k6, Vegeta) at scale
 
 ## License
 
-MIT (add a LICENSE file if you want)
-
----
-
-### Resume Snippet
-
-**Built “event-fanout” (Go + Redis Pub/Sub)** with room-based broadcast, heartbeats, and back-pressure-aware writers; load-tested to **200 clients**, **3,992 msgs/s**, **P95 0.9 ms** on localhost.
+MIT — see [LICENSE](./LICENSE).
