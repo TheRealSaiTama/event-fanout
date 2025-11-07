@@ -1,0 +1,5 @@
+.gocache/
+.gomodcache/
+bin/
+bench.out
+README.prev.md

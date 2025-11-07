@@ -7,8 +7,6 @@ import (
 	"github.com/TheRealSaiTama/event-fanout/internal/store"
 )
 
-// Handler upgrades to WebSocket and joins a room.
-// GET /ws?room=<name>&client_id=<id>
 func Handler(h *Hub, ps *store.PubSub) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		room := r.URL.Query().Get("room")

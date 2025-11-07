@@ -22,7 +22,6 @@ func main() {
 
 	url := fmt.Sprintf("%s?room=%s&client_id=", *base, *room)
 
-	// Connect clients
 	type client struct{ c *websocket.Conn }
 	clients := make([]client, *n)
 	var wg sync.WaitGroup
@@ -36,12 +35,10 @@ func main() {
 		clients[i] = client{c: dial(i)}
 	}
 
-	// Collector
 	lats := make([]float64, 0, 100000)
 	var mu sync.Mutex
 	addLat := func(ms float64) { mu.Lock(); lats = append(lats, ms); mu.Unlock() }
 
-	// Readers
 	stop := make(chan struct{})
 	for i := range clients {
 		wg.Add(1)
@@ -54,7 +51,6 @@ func main() {
 				default:
 					_, msg, err := c.ReadMessage()
 					if err != nil { return }
-					// payload is unix ns timestamp in text (int64)
 					var ts int64
 					_, err = fmt.Sscanf(string(msg), "%d", &ts)
 					if err == nil {
@@ -66,7 +62,6 @@ func main() {
 		}(clients[i].c)
 	}
 
-	// Publisher
 	pub, _, err := websocket.DefaultDialer.Dial(url+"pub", nil)
 	if err != nil { log.Fatalf("dial pub: %v", err) }
 	ticker := time.NewTicker(time.Second / time.Duration(*rate))
@@ -85,17 +80,14 @@ func main() {
 			_ = pub.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("%d", ts)))
 			sendCount++
 		case <-recvTicker.C:
-			// keep loop responsive
 		}
 	}
 
-	// Stop
 	close(stop)
 	for _, cl := range clients { _ = cl.c.Close() }
 	_ = pub.Close()
 	wg.Wait()
 
-	// Stats
 	mu.Lock()
 	sort.Float64s(lats)
 	total := len(lats)
